@@ -1,0 +1,108 @@
+name: Build
+
+on:
+- push
+- pull_request
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        deps:
+        - os: ubuntu-22.04
+          clang: clang++-14
+          clang_packages: clang-14 libc++-14-dev libc++abi-14-dev
+        - os: ubuntu-22.04
+          clang: clang++-15
+          clang_packages: clang-15 libc++-15-dev libc++abi-15-dev
+        - os: ubuntu-24.04
+          clang: clang++-16
+          clang_packages: clang-16 libc++-16-dev libc++abi-16-dev
+        - os: ubuntu-24.04
+          clang: clang++-17
+          clang_packages: clang-17 libc++-17-dev libc++abi-17-dev
+        - os: ubuntu-24.04
+          clang: clang++-18
+          clang_packages: clang-18 libc++-18-dev libc++abi-18-dev
+
+    name: ${{ matrix.deps.os }} ${{ matrix.deps.clang }}
+
+    runs-on: ${{ matrix.deps.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Update apt cache
+      run: sudo apt-get update
+
+    - name: Install apt packages for dependencies
+      run: >
+        sudo apt-get install
+        -y --no-install-recommends
+        g++
+        gdb
+        ${{ matrix.deps.clang_packages }}
+
+    - name: Test gcc
+      run: |
+        mkdir -p build/gcc
+        cmake \
+            -B build/gcc \
+            -G 'Unix Makefiles' \
+            -D CMAKE_BUILD_TYPE=Debug \
+            -D CMAKE_CXX_COMPILER=g++
+        cmake --build build/gcc -- VERBOSE=1
+        export LD_LIBRARY_PATH="${PWD}/build/gcc"
+        build/gcc/dlopen_test
+
+    - name: Test clang good
+      run: |
+        mkdir -p build/clang/good
+        cmake \
+            -B build/clang/good \
+            -G 'Unix Makefiles' \
+            -D CMAKE_BUILD_TYPE=Debug \
+            -D CMAKE_CXX_COMPILER=${{ matrix.deps.clang }}
+        cmake --build build/clang/good -- VERBOSE=1
+        export LD_LIBRARY_PATH="${PWD}/build/clang/good"
+        build/clang/good/dlopen_test
+
+    - name: Test clang with libc++ good
+      run: |
+        mkdir -p build/clang/good_libc++
+        cmake \
+            -B build/clang/good_libc++ \
+            -G 'Unix Makefiles' \
+            -D CMAKE_BUILD_TYPE=Debug \
+            -D CMAKE_CXX_COMPILER=${{ matrix.deps.clang }} \
+            -D CMAKE_CXX_FLAGS='-stdlib=libc++' \
+            -D CMAKE_EXE_LINKER_FLAGS='-stdlib=libc++' \
+            -D DLOPEN_TEST_ENABLE_EXPORTS=ON
+        cmake --build build/clang/good_libc++ -- VERBOSE=1
+        export LD_LIBRARY_PATH="${PWD}/build/clang/good_libc++"
+        build/clang/good_libc++/dlopen_test
+
+    - name: Test clang with libc++ bad
+      run: |
+        mkdir -p build/clang/bad_libc++
+        cmake \
+            -B build/clang/bad_libc++ \
+            -G 'Unix Makefiles' \
+            -D CMAKE_BUILD_TYPE=Debug \
+            -D CMAKE_CXX_COMPILER=${{ matrix.deps.clang }} \
+            -D CMAKE_CXX_FLAGS='-stdlib=libc++' \
+            -D CMAKE_EXE_LINKER_FLAGS='-stdlib=libc++' \
+            -D DLOPEN_TEST_ENABLE_EXPORTS=OFF
+        cmake --build build/clang/bad_libc++ -- VERBOSE=1
+        export LD_LIBRARY_PATH="${PWD}/build/clang/bad_libc++"
+        gdb \
+          -ex 'set debuginfod enabled on' \
+          -ex 'set breakpoint pending on' \
+          -ex 'break registry.cpp:22' \
+          -ex run \
+          -ex 'bt full' \
+          -ex continue \
+          -ex 'bt full' \
+          -ex quit \
+          --args build/clang/bad_libc++/dlopen_test
